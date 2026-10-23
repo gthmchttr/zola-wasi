@@ -1,6 +1,6 @@
 // Runs Zola off the main thread. Messages in: { id, files, options }; out: { id, result } or { id, error }.
-// scripts/serve-demo.sh stages zola.js (the library) and zola.wasm next to this file.
-import { loadZola } from "./zola.js";
+// Uses the release's two browser files, staged next to this one by scripts/serve-demo.sh.
+import { loadZola } from "./zola-wasi.js";
 
 const zola = loadZola(new URL("zola.wasm", import.meta.url));
 

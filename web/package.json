@@ -16,9 +16,13 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test/zola.test.js"
+    "test": "node --test test/zola.test.js",
+    "bundle": "node build-bundle.mjs ../dist/zola-wasi.js"
   },
   "dependencies": {
     "@bjorn3/browser_wasi_shim": "0.4.2"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
   }
 }

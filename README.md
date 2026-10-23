@@ -34,6 +34,7 @@ Each [release](../../releases) has:
 | Asset | |
 |---|---|
 | `zola.wasm`, `zola.wasm.gz` | Zola's CLI for `wasm32-wasip1` |
+| `zola-wasi.js` | For browsers: the JavaScript library with a WASI runtime built in, one file, no dependencies |
 | `zola-wasi-<version>.tgz` | The JavaScript package, `zola.wasm` included: `npm install <its URL>` |
 | `SHA256SUMS` | Checksums of the above |
 
@@ -71,7 +72,7 @@ running the tests. It also installs the `wasm32-wasip1` Rust target if it's miss
 | `scripts/release-notes.sh` | Writes a release's notes |
 | `scripts/update-upstream.sh` | Points `UPSTREAM` at the latest (or a given) Zola release |
 | `.github/workflows/` | CI (`test.yml`), releases (`release.yml`), upstream updates (`update-upstream.yml`) |
-| `web/` | The `zola-wasi` JavaScript package: `src/index.js`, its tests and the demo |
+| `web/` | The `zola-wasi` JavaScript package: `src/index.js`, its tests, the demo and `build-bundle.mjs` (browser bundle) |
 | `tests/compare_outputs.py` | Compares two Zola output directories |
 
 ### The patches
@@ -122,9 +123,49 @@ Each call runs in a fresh instance, so calls are independent and can run concurr
 For anything bigger than a toy site, run it in a Web Worker as `web/demo/worker.js` does. A
 build blocks the thread it runs on, and image processing in particular takes seconds.
 
-The library imports the shim by its package name, so a bundler (or an import map, on the main
-thread) has to resolve it. `scripts/serve-demo.sh` shows a bundler-free setup that rewrites the
-import instead.
+#### In a web page, without npm
+
+Browsers run WebAssembly but don't implement WASI, which `zola.wasm` needs to read files and
+print logs. The release's `zola-wasi.js` provides it: the library with the WASI shim built in,
+as one dependency-free ES module (30 KB). Serve it next to `zola.wasm`:
+
+```html
+<script type="module">
+  import { loadZola } from "./zola-wasi.js";
+  const zola = await loadZola(new URL("zola.wasm", import.meta.url));
+  const { ok, files } = await zola.build({ files: { /* … */ } });
+</script>
+```
+
+Serve `zola.wasm` as `application/wasm` so it compiles while it downloads. The demo
+(`web/demo`) uses exactly these two files.
+
+#### In Node
+
+Node has WASI built in, so for a site in a folder you can run `zola.wasm` directly, as with
+wasmtime, without this library (`node:wasi` is marked experimental and prints a warning):
+
+```js
+import { WASI } from "node:wasi";
+import { readFile } from "node:fs/promises";
+
+const wasi = new WASI({
+  version: "preview1",
+  args: ["zola", "--root", "/site", "build"],
+  preopens: { "/site": "./my-site" },
+});
+const module = await WebAssembly.compile(await readFile("zola.wasm"));
+wasi.start(await WebAssembly.instantiate(module, wasi.getImportObject()));
+```
+
+Use the npm package when the site's files are in memory rather than on disk. It resolves its
+dependency through npm; bundlers handle that as usual.
+
+#### In Deno and Bun
+
+Deno's `node:wasi` isn't implemented (constructing `WASI` throws), but `zola-wasi.js` carries its
+own runtime and works there: `deno run --allow-read` is enough to load `zola.wasm` from disk. Bun
+hasn't been tested.
 
 ## Limitations
 
@@ -152,8 +193,9 @@ import instead.
 3. `dist/zola.wasm` under wasmtime: Zola's `test_site`, `test_site_i18n` and docs site must
    produce the same output as a native build (with image hashes normalised, see above); `check`
    skips external links; an invalid site fails.
-4. The JavaScript library in Node with the browser shim: `test_site` must be byte-identical to
-   the wasmtime build, plus options, errors, concurrent builds and path validation.
+4. The JavaScript library in Node with the browser shim, from source and as the browser bundle:
+   `test_site` must be byte-identical to the wasmtime build, plus options, errors, concurrent
+   builds, path validation and a silent console.
 
 `.github/workflows/test.yml` runs it, plus shellcheck and actionlint, on every push and pull
 request, on Linux and macOS.

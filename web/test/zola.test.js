@@ -4,9 +4,10 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { before, test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { loadZola } from "../src/index.js";
+// ZOLA_LIB tests another build of the library, e.g. the browser bundle (dist/zola-wasi.js)
+const { loadZola } = await import(process.env.ZOLA_LIB ? pathToFileURL(process.env.ZOLA_LIB).href : "../src/index.js");
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const wasmPath = process.env.ZOLA_WASM ?? join(repo, "dist/zola.wasm");

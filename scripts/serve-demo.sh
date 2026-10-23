@@ -1,20 +1,17 @@
 #!/usr/bin/env bash
 # Serve the browser demo (web/demo) at http://127.0.0.1:${PORT:-8000}/
-# Stages the demo, the library and dist/zola.wasm into dist/demo, rewriting the library's bare
-# import of the WASI shim to a relative path (import maps don't reach Web Workers).
+# Stages the demo with the browser bundle (dist/zola-wasi.js) and dist/zola.wasm into dist/demo.
 . "$(dirname "$0")/common.sh"
 
-[ -f "$DIST_DIR/zola.wasm" ] || die "dist/zola.wasm missing: run scripts/build.sh first"
-[ -d "$ROOT/web/node_modules" ] || (cd "$ROOT/web" && npm ci --silent)
+for file in zola.wasm zola-wasi.js; do
+  [ -f "$DIST_DIR/$file" ] || die "dist/$file missing: run scripts/build.sh first"
+done
 
 STAGE="$DIST_DIR/demo"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
 cp "$ROOT"/web/demo/* "$STAGE/"
-cp -R "$ROOT/web/node_modules/@bjorn3/browser_wasi_shim/dist" "$STAGE/browser_wasi_shim"
-sed 's#from "@bjorn3/browser_wasi_shim"#from "./browser_wasi_shim/index.js"#' "$ROOT/web/src/index.js" >"$STAGE/zola.js"
-grep -q '"./browser_wasi_shim/index.js"' "$STAGE/zola.js" || die "couldn't rewrite the shim import in web/src/index.js"
-cp "$DIST_DIR/zola.wasm" "$STAGE/"
+cp "$DIST_DIR/zola.wasm" "$DIST_DIR/zola-wasi.js" "$STAGE/"
 
 PORT="${PORT:-8000}"
 log "Serving the demo at http://127.0.0.1:$PORT/ (Ctrl-C to stop)"

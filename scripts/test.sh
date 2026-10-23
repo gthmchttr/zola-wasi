@@ -4,7 +4,8 @@
 #   1. Upstream's CI checks on the patched tree: cargo fmt, build, test, and the docs site build
 #   2. clippy on library and binary code, native and wasm32-wasip1, with warnings as errors
 #   3. dist/zola.wasm under wasmtime: builds Zola's test sites and docs, compared with a native build
-#   4. The JavaScript library (web/) in Node with the in-browser WASI shim, compared with wasmtime
+#   4. The JavaScript library (web/) in Node with the in-browser WASI shim, compared with wasmtime,
+#      both from source and as the browser bundle (dist/zola-wasi.js)
 #
 # --quick skips 1 and 2.
 . "$(dirname "$0")/common.sh"
@@ -72,9 +73,11 @@ fi
 log "JavaScript library (Node, browser WASI shim)"
 (
   cd "$ROOT/web" || exit
-  [ -d node_modules ] || npm ci --silent
-  ZOLA_WASM="$DIST_DIR/zola.wasm" EXPECTED_DIR="$WORK/wasm/test_site.out" SITE_DIR="$ZOLA_DIR/test_site" \
-    INVALID_SITE_DIR="$ZOLA_DIR/test_sites_invalid/indexmd" npm test --silent
+  export ZOLA_WASM="$DIST_DIR/zola.wasm" EXPECTED_DIR="$WORK/wasm/test_site.out" SITE_DIR="$ZOLA_DIR/test_site" \
+    INVALID_SITE_DIR="$ZOLA_DIR/test_sites_invalid/indexmd"
+  npm test --silent
+  log "JavaScript browser bundle (dist/zola-wasi.js)"
+  ZOLA_LIB="$DIST_DIR/zola-wasi.js" npm test --silent
 )
 
 log "All tests passed"

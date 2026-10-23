@@ -18,7 +18,17 @@ It's the real \`zola\` CLI: \`build\`, \`check\`, \`init\` and \`completion\` wo
 wasmtime run --dir ./my-site::/site zola.wasm --root /site build
 \`\`\`
 
-In browsers and Node, install the JavaScript package from this release:
+In a web page, serve \`zola-wasi.js\` (the library with a WASI runtime built in, no dependencies) next to \`zola.wasm\`:
+
+\`\`\`html
+<script type="module">
+  import { loadZola } from "./zola-wasi.js";
+  const zola = await loadZola(new URL("zola.wasm", import.meta.url));
+  const { ok, files, stderr } = await zola.build({ files: { "zola.toml": "...", "content/_index.md": "..." } });
+</script>
+\`\`\`
+
+With npm, install the JavaScript package from this release (\`zola.wasm\` included):
 
 \`\`\`sh
 npm install https://github.com/${GITHUB_REPOSITORY:-OWNER/zola-wasi}/releases/download/${tag}/zola-wasi-${ZOLA_TAG#v}.tgz
