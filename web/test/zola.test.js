@@ -15,8 +15,9 @@ const siteDir = process.env.SITE_DIR ?? join(repo, "zola/test_site");
 const invalidSiteDir = process.env.INVALID_SITE_DIR ?? join(repo, "zola/test_sites_invalid/indexmd");
 const expectedDir = process.env.EXPECTED_DIR;
 // Files this Zola release doesn't build deterministically can't be compared byte for byte between
-// two builds. scripts/test.sh passes the ones it found natively; more are found in before().
+// two builds. scripts/test.sh passes the ones it found natively; isUnstable() finds the rest.
 const unstable = new Set((process.env.UNSTABLE_FILES ?? "").split("\n").filter(Boolean));
+const same = (a, b) => a !== undefined && b !== undefined && Buffer.from(a).equals(Buffer.from(b));
 
 // Every file under dir, keyed by "/"-separated path relative to it
 function readTree(dir) {
@@ -35,15 +36,23 @@ let zola;
 before(async () => {
   assert.ok(existsSync(wasmPath), `${wasmPath} is missing: run scripts/build.sh first`);
   zola = await loadZola(readFileSync(wasmPath));
-  // Some Zola releases (e.g. 0.22) order unsorted pages differently on every build
+});
+
+// Some Zola releases (e.g. 0.22) order unsorted pages differently on every build. A file is
+// unstable if any of up to 12 builds of the site differs from the first.
+const reference = new Map();
+async function isUnstable(path) {
+  if (unstable.has(path)) return true;
   const files = readTree(siteDir);
-  const builds = await Promise.all([1, 2, 3].map(() => zola.build({ files })));
-  for (const [path, data] of builds[0].files) {
-    if (builds.slice(1).some((other) => !Buffer.from(data).equals(Buffer.from(other.files.get(path) ?? [])))) {
+  if (!reference.has(path)) reference.set(path, (await zola.build({ files })).files.get(path));
+  for (let i = 0; i < 12; i++) {
+    if (!same(reference.get(path), (await zola.build({ files })).files.get(path))) {
       unstable.add(path);
+      return true;
     }
   }
-});
+  return false;
+}
 
 test("reports its version", async () => {
   assert.match(await zola.version(), /^zola \d+\.\d+\.\d+$/);
@@ -61,8 +70,9 @@ test("builds a site", async () => {
     const expected = readTree(expectedDir);
     assert.deepEqual([...result.files.keys()].sort(), [...expected.keys()].sort());
     for (const [path, data] of expected) {
-      if (unstable.has(path)) continue;
-      assert.ok(Buffer.from(result.files.get(path)).equals(Buffer.from(data)), `${path} differs from wasmtime`);
+      if (!same(result.files.get(path), data) && !(await isUnstable(path))) {
+        assert.fail(`${path} differs from wasmtime`);
+      }
     }
   }
 });
@@ -124,6 +134,6 @@ test("builds are independent", async () => {
   assert.ok(a.ok && b.ok);
   assert.deepEqual([...a.files.keys()], [...b.files.keys()]);
   for (const [path, data] of a.files) {
-    if (!unstable.has(path)) assert.deepEqual(data, b.files.get(path), `${path} differs between builds`);
+    if (!same(data, b.files.get(path)) && !(await isUnstable(path))) assert.fail(`${path} differs between builds`);
   }
 });

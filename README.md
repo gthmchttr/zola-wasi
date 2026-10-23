@@ -235,8 +235,8 @@ hasn't been tested.
    `test_site` must be byte-identical to the wasmtime build, plus options, errors, concurrent
    builds, path validation and a silent console.
 
-`.github/workflows/test.yml` runs it on Linux and macOS, on every push and pull request, for the
-newest release of each line in `VERSIONS`, which covers every patch series, after checking the
+`.github/workflows/test.yml` runs it on Linux (the wasm is the same whichever OS builds it), on
+every push and pull request, for the newest release of each line in `VERSIONS`, which covers every patch series, after checking the
 series, shellcheck and actionlint. `release.yml` runs it again for each version it publishes.
 
 The clippy check fails only on warnings in lines the patches add: older Zola releases trip

@@ -59,21 +59,32 @@ trap 'rm -rf "$WORK"' EXIT
 
 # build_site NAME: build $ZOLA_DIR/NAME natively and under wasmtime, each from a fresh copy
 # (image processing writes into the site's static/), and compare the outputs.
+build_native() {
+  local name=$1 run=$2
+  mkdir -p "$WORK/$run"
+  cp -R "$ZOLA_DIR/$name" "$WORK/$run/$name"
+  "$NATIVE" --root "$WORK/$run/$name" build --output-dir "$WORK/$run/$name.out" >/dev/null
+}
+
 build_site() {
-  local name=$1
-  local run
-  for run in native native-2 native-3 wasm; do
-    mkdir -p "$WORK/$run"
-    cp -R "$ZOLA_DIR/$name" "$WORK/$run/$name"
-  done
-  # Extra native builds show which files Zola itself doesn't build deterministically
-  for run in native native-2 native-3; do
-    "$NATIVE" --root "$WORK/$run/$name" build --output-dir "$WORK/$run/$name.out" >/dev/null
-  done
+  local name=$1 builds=3 i
+  mkdir -p "$WORK/wasm"
+  cp -R "$ZOLA_DIR/$name" "$WORK/wasm/$name"
   "$WASMTIME" run --dir "$WORK/wasm::/work" "$DIST_DIR/zola.wasm" \
     --root "/work/$name" build --output-dir "/work/$name.out" >/dev/null
-  python3 "$ROOT/tests/compare_outputs.py" "$WORK/native/$name.out" "$WORK/wasm/$name.out" \
-    "$WORK/native-2/$name.out" "$WORK/native-3/$name.out"
+  # Extra native builds show which files Zola itself doesn't build deterministically. Any file
+  # still differing gets up to 12 native builds: real mismatches are those every build agrees on.
+  for i in $(seq 1 "$builds"); do build_native "$name" "native-$i"; done
+  compare() {
+    local others=()
+    for i in $(seq 2 "$builds"); do others+=("$WORK/native-$i/$name.out"); done
+    python3 "$ROOT/tests/compare_outputs.py" "$WORK/native-1/$name.out" "$WORK/wasm/$name.out" "${others[@]}"
+  }
+  until compare >/dev/null 2>&1 || [ "$builds" -ge 12 ]; do
+    builds=$((builds + 1))
+    build_native "$name" "native-$builds"
+  done
+  compare
 }
 
 for site in test_site test_site_i18n docs; do
@@ -96,8 +107,7 @@ log "JavaScript library (Node, browser WASI shim)"
   export ZOLA_WASM="$DIST_DIR/zola.wasm" EXPECTED_DIR="$WORK/wasm/test_site.out" SITE_DIR="$ZOLA_DIR/test_site" \
     INVALID_SITE_DIR="$ZOLA_DIR/test_sites_invalid/indexmd"
   # Files this Zola release doesn't build deterministically can't be compared byte for byte
-  UNSTABLE_FILES="$(python3 "$ROOT/tests/compare_outputs.py" --unstable \
-    "$WORK/native/test_site.out" "$WORK/native-2/test_site.out" "$WORK/native-3/test_site.out")"
+  UNSTABLE_FILES="$(python3 "$ROOT/tests/compare_outputs.py" --unstable "$WORK"/native-*/test_site.out)"
   export UNSTABLE_FILES
   npm test --silent
   log "JavaScript browser bundle (dist/zola-wasi.js)"
