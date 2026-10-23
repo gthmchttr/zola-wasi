@@ -23,10 +23,6 @@ wasmtime_sha256() {
   esac
 }
 
-sha256() {
-  if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
-}
-
 # fetch URL SHA256 DEST_DIR: download, verify and unpack an archive with a single top-level directory into DEST_DIR
 fetch() {
   local url=$1 expected=$2 dest=$3 tmp
@@ -35,7 +31,7 @@ fetch() {
   log "Downloading $url"
   curl --fail --location --silent --show-error --output "$tmp/archive" "$url"
   local actual
-  actual="$(sha256 "$tmp/archive")"
+  actual="$(sha256 "$tmp/archive" | cut -d" " -f1)"
   [ "$actual" = "$expected" ] || die "checksum mismatch for $url: expected $expected, got $actual"
   mkdir -p "$tmp/out"
   tar -xf "$tmp/archive" -C "$tmp/out"

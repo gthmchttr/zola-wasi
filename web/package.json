@@ -4,9 +4,13 @@
   "description": "Zola, the static site generator, compiled to WebAssembly: build sites in the browser or Node",
   "license": "EUPL-1.2",
   "type": "module",
-  "exports": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./zola.wasm": "./zola.wasm"
+  },
   "files": [
-    "src"
+    "src",
+    "zola.wasm"
   ],
   "engines": {
     "node": ">=20"

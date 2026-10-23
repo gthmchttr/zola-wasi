@@ -1,4 +1,7 @@
 # Shared settings for the scripts in this directory. Source it, don't run it.
+# shellcheck shell=bash
+# The variables here are used by the scripts that source this file
+# shellcheck disable=SC2034
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -12,6 +15,11 @@ TARGET=wasm32-wasip1
 
 WASI_SDK_VERSION=34.0
 WASMTIME_VERSION=v50.0.0
+
+# sha256 FILE...: "<hash>  <file>" lines, with GNU coreutils or macOS's shasum
+sha256() {
+  if command -v sha256sum >/dev/null; then sha256sum "$@"; else shasum -a 256 "$@"; fi
+}
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }

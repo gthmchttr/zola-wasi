@@ -22,9 +22,23 @@ const { ok, files, stderr } = await zola.build({
 // files: Map of output path → Uint8Array, e.g. files.get("index.html")
 ```
 
-This repository is a small patch series on top of a pinned Zola release, plus the scripts to
-build and test it and a JavaScript wrapper for browsers and Node. It currently targets
-**Zola 0.23.6**.
+This repository doesn't contain Zola. It holds a small patch series, the Zola release it
+applies to (`UPSTREAM`, currently **Zola 0.23.6**), scripts that fetch that release, patch,
+build and test it, and a JavaScript wrapper for browsers and Node. GitHub Actions publish the
+result as releases and keep `UPSTREAM` current.
+
+## Download
+
+Each [release](../../releases) has:
+
+| Asset | |
+|---|---|
+| `zola.wasm`, `zola.wasm.gz` | Zola's CLI for `wasm32-wasip1` |
+| `zola-wasi-<version>.tgz` | The JavaScript package, `zola.wasm` included: `npm install <its URL>` |
+| `SHA256SUMS` | Checksums of the above |
+
+Release tags match the Zola version they're built from (`v0.23.6`). A re-release of the same
+Zola version with changed patches gets a suffix (`v0.23.6-2`).
 
 ## Quick start
 
@@ -53,6 +67,10 @@ running the tests. It also installs the `wasm32-wasip1` Rust target if it's miss
 | `scripts/test.sh` | The full test suite |
 | `scripts/export-patches.sh` | Regenerates `patches/` from commits in `zola/` |
 | `scripts/serve-demo.sh` | Serves `web/demo` |
+| `scripts/package.sh` | Assembles release assets into `dist/release/` |
+| `scripts/release-notes.sh` | Writes a release's notes |
+| `scripts/update-upstream.sh` | Points `UPSTREAM` at the latest (or a given) Zola release |
+| `.github/workflows/` | CI (`test.yml`), releases (`release.yml`), upstream updates (`update-upstream.yml`) |
 | `web/` | The `zola-wasi` JavaScript package: `src/index.js`, its tests and the demo |
 | `tests/compare_outputs.py` | Compares two Zola output directories |
 
@@ -91,7 +109,7 @@ Node's built-in `node:wasi` works the same way.
 filesystem, so nothing touches the disk or the DOM.
 
 - `loadZola(source)` compiles the module once. `source` is a URL, a `Response`, bytes, or a
-  `WebAssembly.Module`.
+  `WebAssembly.Module`. The package ships the module as `zola-wasi/zola.wasm`.
 - `zola.build({ files, config?, baseUrl?, drafts?, minify? })` resolves to
   `{ ok, exitCode, files, stdout, stderr }`. `files` maps output paths to `Uint8Array`s.
   `stderr` holds Zola's log lines, including errors.
@@ -137,12 +155,36 @@ import instead.
 4. The JavaScript library in Node with the browser shim: `test_site` must be byte-identical to
    the wasmtime build, plus options, errors, concurrent builds and path validation.
 
-## Updating to a new Zola release
+`.github/workflows/test.yml` runs it, plus shellcheck and actionlint, on every push and pull
+request, on Linux and macOS.
 
-1. Set the new tag and its commit in `UPSTREAM`.
+## Releases and Zola updates
+
+Both are automated:
+
+- **`update-upstream.yml`** checks daily for a new Zola release. When there is one, it opens a
+  PR (branch `update-zola-<tag>`) that updates `UPSTREAM` and `web/package.json`, saying whether
+  the patches still apply. Run it by hand to target a specific tag.
+- **`release.yml`** runs when `UPSTREAM` or `patches/` change on `main`, so merging an update
+  PR publishes the new version. It runs the full test suite, then publishes a **pre-release**
+  (a release candidate) tagged with the Zola version. Promote it to a full release from the
+  GitHub UI once you're happy with it. Run it by hand to choose the tag (e.g. `v0.23.6-2` to
+  re-release with changed patches) or to publish directly as a full release.
+
+One-time setup in the repository's settings:
+
+1. **Actions → General → Workflow permissions:** "Read and write permissions", and allow GitHub
+   Actions to create pull requests.
+2. **Optional:** add a fine-grained token with Contents and Pull requests read/write as the
+   `UPDATE_PR_TOKEN` secret. PRs opened with the default token don't trigger other workflows,
+   so without it the update PR's CI only runs once you push to the branch.
+
+### Updating by hand
+
+1. `scripts/update-upstream.sh` (or `scripts/update-upstream.sh v0.24.0`).
 2. `rm -rf zola && scripts/setup.sh`. If a patch no longer applies, fix it up with `git am`
    in `zola/` (or apply it by hand and commit), then `scripts/export-patches.sh`.
-3. `scripts/test.sh`, and bump `version` in `web/package.json` to match.
+3. `scripts/test.sh`.
 
 To change a patch: edit and commit in `zola/` (on branch `wasi`), then
 `scripts/export-patches.sh`. `setup.sh --keep`, which `build.sh` uses, leaves your checkout

@@ -18,7 +18,7 @@ use_wasi_sdk
 if ! $quick; then
   log "Upstream checks: fmt, build, test, docs"
   (
-    cd "$ZOLA_DIR"
+    cd "$ZOLA_DIR" || exit
     cargo fmt --check
     cargo build --locked --all
     cargo test --locked --all
@@ -29,7 +29,7 @@ if ! $quick; then
 
   log "clippy (native and $TARGET)"
   (
-    cd "$ZOLA_DIR"
+    cd "$ZOLA_DIR" || exit
     cargo clippy --locked --all -- -D warnings
     cargo clippy --locked --all --target "$TARGET" -- -D warnings
   )
@@ -71,7 +71,7 @@ fi
 
 log "JavaScript library (Node, browser WASI shim)"
 (
-  cd "$ROOT/web"
+  cd "$ROOT/web" || exit
   [ -d node_modules ] || npm ci --silent
   ZOLA_WASM="$DIST_DIR/zola.wasm" EXPECTED_DIR="$WORK/wasm/test_site.out" SITE_DIR="$ZOLA_DIR/test_site" \
     INVALID_SITE_DIR="$ZOLA_DIR/test_sites_invalid/indexmd" npm test --silent

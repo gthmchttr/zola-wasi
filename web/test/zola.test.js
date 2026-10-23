@@ -93,6 +93,18 @@ test("rejects paths outside the site", async () => {
   await assert.rejects(zola.build({}), /files is required/);
 });
 
+test("doesn't write to the console", async () => {
+  const calls = [];
+  const original = { log: console.log, warn: console.warn, error: console.error };
+  for (const level of Object.keys(original)) console[level] = (...args) => calls.push([level, ...args]);
+  try {
+    await zola.build({ files: readTree(siteDir) });
+  } finally {
+    Object.assign(console, original);
+  }
+  assert.deepEqual(calls, []);
+});
+
 test("builds are independent", async () => {
   const files = readTree(siteDir);
   const [a, b] = await Promise.all([zola.build({ files }), zola.build({ files })]);

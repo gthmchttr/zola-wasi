@@ -136,7 +136,8 @@ export class Zola {
       ConsoleStdout.lineBuffered((line) => stderr.push(line)),
       ...preopens,
     ];
-    const shim = new WASI(["zola", ...args], [], fds);
+    // The shim logs every call to the console unless debug is explicitly off
+    const shim = new WASI(["zola", ...args], [], fds, { debug: false });
     let exitCode;
     try {
       const instance = await WebAssembly.instantiate(this.module, { wasi_snapshot_preview1: shim.wasiImport });

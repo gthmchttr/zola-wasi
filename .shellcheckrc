@@ -1,0 +1,4 @@
+# Let shellcheck follow `. "$(dirname "$0")/common.sh"` and common.sh's `. "$ROOT/UPSTREAM"`
+source-path=SCRIPTDIR
+source-path=SCRIPTDIR/..
+external-sources=true
