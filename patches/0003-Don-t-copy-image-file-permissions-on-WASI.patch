@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gautham Chettiar <gauthamchettiar@email.com>
+Date: Fri, 23 Oct 2026 08:27:27 +0100
+Subject: [PATCH] Don't copy image file permissions on WASI
+
+WASI has no file permissions, so fs::set_permissions always fails there and
+aborted every image operation.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ components/imageproc/src/processor.rs | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/components/imageproc/src/processor.rs b/components/imageproc/src/processor.rs
+index 704b23c..504210f 100644
+--- a/components/imageproc/src/processor.rs
++++ b/components/imageproc/src/processor.rs
+@@ -44,6 +44,7 @@ impl ImageOp {
+         }
+ 
+         log::debug!("processing {} with instructions {:?}", self.input_path.display(), self.instr);
++        #[cfg(not(target_os = "wasi"))]
+         let input_permissions = fs::metadata(&self.input_path)?.permissions();
+         let reader =
+             ImageReader::open(&self.input_path).and_then(ImageReader::with_guessed_format)?;
+@@ -159,6 +160,8 @@ impl ImageOp {
+             }
+         };
+ 
++        // WASI has no notion of file permissions
++        #[cfg(not(target_os = "wasi"))]
+         fs::set_permissions(&tmp_output_file, input_permissions)?;
+         fs::rename(&tmp_output_file, &self.output_path)?;
+ 

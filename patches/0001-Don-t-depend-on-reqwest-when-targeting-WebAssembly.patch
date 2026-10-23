@@ -1,0 +1,265 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gautham Chettiar <gauthamchettiar@email.com>
+Date: Fri, 23 Oct 2026 08:27:27 +0100
+Subject: [PATCH] Don't depend on reqwest when targeting WebAssembly
+
+reqwest's blocking client needs tokio's networking and a native TLS stack,
+neither of which builds for wasm32 targets. Make it a native-only dependency
+of link_checker and templates:
+
+- link_checker: external links can't be checked on wasm; check_url returns
+  an error saying so. StatusCode now comes from the `http` crate, which
+  reqwest re-exports, so the public type is unchanged.
+- load_data: loading a remote URL errors on wasm, or returns none when
+  `required=false`, matching how a failed optional fetch behaves natively.
+  Request arguments are still validated.
+
+Native builds are unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ Cargo.lock                                    |  1 +
+ Cargo.toml                                    |  1 +
+ components/link_checker/Cargo.toml            |  5 ++-
+ components/link_checker/src/lib.rs            | 32 +++++++++++++------
+ components/templates/Cargo.toml               |  4 ++-
+ .../templates/src/functions/load_data.rs      | 31 +++++++++++++++++-
+ 6 files changed, 62 insertions(+), 12 deletions(-)
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 3dc736b..7b494d7 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -3046,6 +3046,7 @@ version = "0.23.6"
+ dependencies = [
+  "config",
+  "errors",
++ "http",
+  "mockito",
+  "reqwest",
+  "utils",
+diff --git a/Cargo.toml b/Cargo.toml
+index 94f343c..4b39fb3 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -87,6 +87,7 @@ elasticlunr-rs = { version = "3.0.2", features = ["da", "no", "de", "du", "es",
+ fast_image_resize = { version = "6", features = ["image"] }
+ filetime = "0.2"
+ gh-emoji = "1"
++http = "1"
+ globset = "0.4"
+ grass = { version = "0.13", default-features = false, features = ["random"] }
+ image = { version = "0.25", default-features = true, features = ["avif"] }
+diff --git a/components/link_checker/Cargo.toml b/components/link_checker/Cargo.toml
+index c1e5332..9556790 100644
+--- a/components/link_checker/Cargo.toml
++++ b/components/link_checker/Cargo.toml
+@@ -4,12 +4,15 @@ version.workspace = true
+ edition.workspace = true
+ 
+ [dependencies]
+-reqwest = { workspace = true }
++http = { workspace = true }
+ 
+ config = { workspace = true }
+ errors = { workspace = true }
+ utils = { workspace = true }
+ 
++[target.'cfg(not(target_family = "wasm"))'.dependencies]
++reqwest = { workspace = true }
++
+ [dev-dependencies]
+ mockito = "1.6"
+ 
+diff --git a/components/link_checker/src/lib.rs b/components/link_checker/src/lib.rs
+index 1c1e7f1..7c55880 100644
+--- a/components/link_checker/src/lib.rs
++++ b/components/link_checker/src/lib.rs
+@@ -1,15 +1,18 @@
+-use std::collections::HashMap;
+ use std::result;
+-use std::sync::{Arc, RwLock};
+-
+-use reqwest::header::{ACCEPT, HeaderMap};
+-use reqwest::{StatusCode, blocking::Client};
+-use std::sync::LazyLock;
+ 
+ use config::LinkChecker;
+-use errors::anyhow;
+-
+-use utils::anchors::has_anchor_id;
++use http::StatusCode;
++
++// Everything needed to actually check links: there is no HTTP client on wasm targets
++#[cfg(not(target_family = "wasm"))]
++use {
++    errors::anyhow,
++    reqwest::blocking::Client,
++    reqwest::header::{ACCEPT, HeaderMap},
++    std::collections::HashMap,
++    std::sync::{Arc, LazyLock, RwLock},
++    utils::anchors::has_anchor_id,
++};
+ 
+ pub type Result = result::Result<StatusCode, String>;
+ 
+@@ -28,9 +31,11 @@ pub fn message(res: &Result) -> String {
+ }
+ 
+ // Keep history of link checks so a rebuild doesn't have to check again
++#[cfg(not(target_family = "wasm"))]
+ static LINKS: LazyLock<Arc<RwLock<HashMap<String, Result>>>> =
+     LazyLock::new(|| Arc::new(RwLock::new(HashMap::new())));
+ // Make sure to create only a single Client so that we can reuse the connections
++#[cfg(not(target_family = "wasm"))]
+ static CLIENT: LazyLock<Client> = LazyLock::new(|| {
+     Client::builder()
+         .user_agent(concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")))
+@@ -38,6 +43,13 @@ static CLIENT: LazyLock<Client> = LazyLock::new(|| {
+         .expect("reqwest client build")
+ });
+ 
++/// There is no HTTP client on wasm targets, so external links can't be checked there.
++#[cfg(target_family = "wasm")]
++pub fn check_url(_url: &str, _config: &LinkChecker) -> Result {
++    Err("External link checking is not supported on WebAssembly".to_string())
++}
++
++#[cfg(not(target_family = "wasm"))]
+ pub fn check_url(url: &str, config: &LinkChecker) -> Result {
+     {
+         let guard = LINKS.read().unwrap();
+@@ -97,6 +109,7 @@ pub fn check_url(url: &str, config: &LinkChecker) -> Result {
+     res
+ }
+ 
++#[cfg(not(target_family = "wasm"))]
+ fn has_anchor(url: &str) -> bool {
+     match url.find('#') {
+         Some(index) => match url.get(index..=index + 1) {
+@@ -107,6 +120,7 @@ fn has_anchor(url: &str) -> bool {
+     }
+ }
+ 
++#[cfg(not(target_family = "wasm"))]
+ fn check_page_for_anchor(url: &str, body: String) -> errors::Result<()> {
+     let index = url.find('#').unwrap();
+     let anchor = url.get(index + 1..).unwrap();
+diff --git a/components/templates/Cargo.toml b/components/templates/Cargo.toml
+index 300b294..c4174c5 100644
+--- a/components/templates/Cargo.toml
++++ b/components/templates/Cargo.toml
+@@ -11,7 +11,6 @@ jiff = { workspace = true }
+ nom-bibtex = { workspace = true }
+ num-format = { workspace = true }
+ roxmltree_to_serde = { workspace = true }
+-reqwest = { workspace = true }
+ serde_json = { workspace = true }
+ serde_yaml = { workspace = true }
+ sha2 = { workspace = true }
+@@ -33,6 +32,9 @@ config = { workspace = true }
+ imageproc = { workspace = true }
+ render = { workspace = true }
+ 
++[target.'cfg(not(target_family = "wasm"))'.dependencies]
++reqwest = { workspace = true }
++
+ [dev-dependencies]
+ mockito = "1.6"
+ tempfile = "3"
+diff --git a/components/templates/src/functions/load_data.rs b/components/templates/src/functions/load_data.rs
+index 6822be3..1dc5a47 100644
+--- a/components/templates/src/functions/load_data.rs
++++ b/components/templates/src/functions/load_data.rs
+@@ -6,7 +6,9 @@ use std::str::FromStr;
+ use std::sync::{Arc, Mutex};
+ 
+ use csv::Reader;
++#[cfg(not(target_family = "wasm"))]
+ use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
++#[cfg(not(target_family = "wasm"))]
+ use reqwest::{blocking::Client, header};
+ use tera::{Error, Function, Kwargs, Map, State, TeraResult, Value};
+ use url::Url;
+@@ -64,6 +66,7 @@ impl FromStr for OutputFormat {
+     }
+ }
+ 
++#[cfg(not(target_family = "wasm"))]
+ impl OutputFormat {
+     fn as_accept_header(&self) -> header::HeaderValue {
+         header::HeaderValue::from_static(match self {
+@@ -181,6 +184,7 @@ fn get_output_format_from_args(
+     }
+ }
+ 
++#[cfg(not(target_family = "wasm"))]
+ fn add_headers_from_args(header_args: Option<Vec<String>>) -> TeraResult<HeaderMap> {
+     let mut headers = HeaderMap::new();
+     if let Some(header_args) = header_args {
+@@ -220,12 +224,14 @@ fn add_headers_from_args(header_args: Option<Vec<String>>) -> TeraResult<HeaderM
+ pub struct LoadData {
+     base_path: PathBuf,
+     theme: Option<String>,
++    #[cfg(not(target_family = "wasm"))]
+     client: Arc<Mutex<Client>>,
+     result_cache: Arc<Mutex<HashMap<u64, Value>>>,
+     output_path: PathBuf,
+ }
+ impl LoadData {
+     pub fn new(base_path: PathBuf, theme: Option<String>, output_path: PathBuf) -> Self {
++        #[cfg(not(target_family = "wasm"))]
+         let client = Arc::new(Mutex::new(
+             Client::builder()
+                 .user_agent(concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")))
+@@ -233,12 +239,20 @@ impl LoadData {
+                 .expect("reqwest client build"),
+         ));
+         let result_cache = Arc::new(Mutex::new(HashMap::new()));
+-        Self { base_path, client, result_cache, theme, output_path }
++        Self {
++            base_path,
++            #[cfg(not(target_family = "wasm"))]
++            client,
++            result_cache,
++            theme,
++            output_path,
++        }
+     }
+ }
+ 
+ impl Default for LoadData {
+     fn default() -> Self {
++        #[cfg(not(target_family = "wasm"))]
+         let client = Arc::new(Mutex::new(
+             Client::builder()
+                 .user_agent(concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")))
+@@ -248,6 +262,7 @@ impl Default for LoadData {
+         Self {
+             base_path: PathBuf::new(),
+             theme: None,
++            #[cfg(not(target_family = "wasm"))]
+             client,
+             result_cache: Arc::new(Mutex::new(HashMap::new())),
+             output_path: PathBuf::new(),
+@@ -323,6 +338,20 @@ impl Function<TeraResult<Value>> for LoadData {
+             DataSource::Path(path) => read_file(&path).map_err(|e| {
+                 Error::message(format!("`load_data`: error reading file {:?}: {}", path, e))
+             }),
++            // There is no HTTP client on wasm targets. The request arguments were still
++            // validated above, so a template behaves the same apart from the fetch itself.
++            #[cfg(target_family = "wasm")]
++            DataSource::Url(url) => {
++                let _ = (method, post_body_arg, post_content_type, headers);
++                if !required {
++                    return Ok(Value::none());
++                }
++                Err(Error::message(format!(
++                    "`load_data`: loading remote URLs ({}) is not supported on WebAssembly",
++                    url
++                )))
++            }
++            #[cfg(not(target_family = "wasm"))]
+             DataSource::Url(url) => {
+                 let response_client = self.client.lock().expect("response client lock");
+                 let req = match method {

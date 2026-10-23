@@ -1,0 +1,9 @@
+# Upstream checkout with patches applied (scripts/setup.sh)
+/zola/
+# Pinned wasi-sdk and wasmtime (scripts/toolchain.sh)
+/.toolchain/
+# Build and test output
+/dist/
+/target-test/
+/web/node_modules/
+.DS_Store

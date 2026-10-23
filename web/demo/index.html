@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zola in the Browser</title>
+<style>
+  :root { --bg: #fafafa; --fg: #1d1d1f; --muted: #6b6b70; --line: #dcdce0; --accent: #2a6df4; --panel: #fff; --error: #c62828; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151517; --fg: #ececf0; --muted: #9a9aa2; --line: #2e2e33; --accent: #6f9bff; --panel: #1d1d20; --error: #ef6b6b; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+  header { display: flex; gap: 12px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0; }
+  #status { color: var(--muted); font-size: 13px; }
+  #status.error { color: var(--error); }
+  button { font: inherit; padding: 5px 12px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  main { display: grid; grid-template-columns: 210px 1fr 1fr; height: calc(100vh - 49px); }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; height: auto; } }
+  nav { border-right: 1px solid var(--line); overflow: auto; padding: 8px 0; }
+  nav h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 8px 12px 4px; }
+  nav button { display: block; width: 100%; text-align: left; border: 0; border-radius: 0; background: none; color: var(--fg); padding: 2px 12px; font: 12px ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  nav button[aria-current="true"] { background: var(--accent); color: #fff; }
+  textarea { width: 100%; height: 100%; min-height: 300px; border: 0; border-right: 1px solid var(--line); resize: none; padding: 12px; font: 13px/1.5 ui-monospace, monospace; background: var(--panel); color: var(--fg); }
+  .preview { display: flex; flex-direction: column; min-height: 400px; }
+  #log { margin: 0; padding: 6px 12px; font: 12px ui-monospace, monospace; color: var(--muted); border-bottom: 1px solid var(--line); max-height: 140px; overflow: auto; white-space: pre-wrap; }
+  iframe { flex: 1; border: 0; background: #fff; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Zola in the Browser</h1>
+  <button id="build" disabled>Build</button>
+  <label><input type="checkbox" id="auto" checked> Rebuild on edit</label>
+  <span id="status" role="status">Loading zola.wasm…</span>
+</header>
+<main>
+  <nav aria-label="Files">
+    <h2>Source</h2><div id="src-list"></div>
+    <h2>Output</h2><div id="out-list"></div>
+  </nav>
+  <textarea id="editor" spellcheck="false" aria-label="File contents"></textarea>
+  <div class="preview">
+    <pre id="log" aria-label="Build log"></pre>
+    <iframe id="preview" title="Preview" sandbox="allow-same-origin"></iframe>
+  </div>
+</main>
+<script type="module">
+// The site lives in memory; links in the preview are rewritten to switch between output pages.
+const BASE_URL = "https://example.com";
+const site = {
+  "zola.toml": `base_url = "${BASE_URL}"
+title = "Zola in the browser"
+compile_sass = true
+
+[markdown.highlighting]
+theme = "github-dark"
+`,
+  "content/_index.md": `+++
+title = "Home"
+sort_by = "date"
++++
+`,
+  "content/hello.md": `+++
+title = "Hello from WebAssembly"
+date = 2026-10-23
++++
+
+This page was rendered by **Zola compiled to \`wasm32-wasip1\`**, running in a Web Worker in your browser.
+
+\`\`\`rust
+fn main() {
+    println!("syntax highlighting works too");
+}
+\`\`\`
+`,
+  "templates/base.html": `<!doctype html>
+<html><head><meta charset="utf-8"><title>{{ config.title }}</title>
+<link rel="stylesheet" href="{{ get_url(path='style.css') }}"></head>
+<body>{% block content %}{% endblock content %}</body></html>
+`,
+  "templates/index.html": `{% extends "base.html" %}
+{% block content %}
+<h1>{{ config.title }}</h1>
+<ul>{% for page in section.pages %}<li><a href="{{ page.permalink }}">{{ page.title }}</a> ({{ page.date }})</li>{% endfor %}</ul>
+{% endblock content %}
+`,
+  "templates/page.html": `{% extends "base.html" %}
+{% block content %}
+<p><a href="{{ get_url(path='/') }}">Home</a></p>
+<h1>{{ page.title }}</h1>
+{{ page.content | safe }}
+{% endblock content %}
+`,
+  "sass/style.scss": `$accent: #2a6df4;
+body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
+h1 { color: $accent; }
+pre { padding: 1rem; border-radius: 6px; overflow: auto; }
+`,
+};
+
+const $ = (id) => document.getElementById(id);
+const decoder = new TextDecoder();
+const worker = new Worker(new URL("worker.js", import.meta.url), { type: "module" });
+let current = "content/hello.md";
+let output = new Map();
+let shown = "index.html";
+let pending = null;
+let nextId = 0;
+let timer;
+
+function build() {
+  if (pending) { pending.again = true; return; }
+  pending = { id: ++nextId, started: performance.now(), again: false };
+  $("build").disabled = true;
+  $("status").textContent = "Building…";
+  $("status").classList.remove("error");
+  worker.postMessage({ id: pending.id, files: site });
+}
+
+worker.onmessage = ({ data }) => {
+  const { again, started } = pending;
+  pending = null;
+  $("build").disabled = false;
+  if (data.error) {
+    $("status").textContent = "Build crashed";
+    $("status").classList.add("error");
+    $("log").textContent = data.error;
+  } else {
+    const { result } = data;
+    $("log").textContent = result.stderr.join("\n");
+    if (result.ok) {
+      output = result.files;
+      $("status").textContent = `Built ${output.size} files in ${Math.round(performance.now() - started)} ms`;
+      renderList($("out-list"), [...output.keys()], shown, show);
+      show(output.has(shown) ? shown : "index.html");
+    } else {
+      $("status").textContent = `Build failed (exit ${result.exitCode})`;
+      $("status").classList.add("error");
+    }
+  }
+  if (again) build();
+};
+
+function renderList(container, paths, active, onPick) {
+  container.replaceChildren(...paths.map((path) => {
+    const button = document.createElement("button");
+    button.textContent = path;
+    button.setAttribute("aria-current", String(path === active));
+    button.onclick = () => onPick(path);
+    return button;
+  }));
+}
+
+function edit(path) {
+  current = path;
+  $("editor").value = site[path];
+  renderList($("src-list"), Object.keys(site), current, edit);
+}
+
+// Inline the stylesheet and make links to the site switch the preview to that output file
+function show(path) {
+  const data = output.get(path);
+  if (!data) return;
+  shown = path;
+  renderList($("out-list"), [...output.keys()], shown, show);
+  let html = decoder.decode(data);
+  if (!path.endsWith(".html")) {
+    html = `<pre>${html.replace(/[&<]/g, (c) => (c === "&" ? "&amp;" : "&lt;"))}</pre>`;
+  }
+  const css = output.get("style.css");
+  if (css) html = html.replace(/<link rel="stylesheet"[^>]*>/, `<style>${decoder.decode(css)}</style>`);
+  $("preview").srcdoc = html;
+  $("preview").onload = () => {
+    $("preview").contentDocument?.querySelectorAll(`a[href^="${BASE_URL}"]`).forEach((a) => {
+      const target = `${a.getAttribute("href").slice(BASE_URL.length).replace(/^\//, "")}index.html`;
+      a.onclick = (event) => { event.preventDefault(); show(target.replace(/\/\/+/, "/")); };
+    });
+  };
+}
+
+$("editor").oninput = () => {
+  site[current] = $("editor").value;
+  if ($("auto").checked) { clearTimeout(timer); timer = setTimeout(build, 300); }
+};
+$("build").onclick = build;
+edit(current);
+build();
+</script>
+</body>
+</html>

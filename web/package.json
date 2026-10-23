@@ -1,0 +1,20 @@
+{
+  "name": "zola-wasi",
+  "version": "0.23.6",
+  "description": "Zola, the static site generator, compiled to WebAssembly: build sites in the browser or Node",
+  "license": "EUPL-1.2",
+  "type": "module",
+  "exports": "./src/index.js",
+  "files": [
+    "src"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/zola.test.js"
+  },
+  "dependencies": {
+    "@bjorn3/browser_wasi_shim": "0.4.2"
+  }
+}

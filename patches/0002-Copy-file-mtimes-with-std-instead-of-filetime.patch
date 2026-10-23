@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gautham Chettiar <gauthamchettiar@email.com>
+Date: Fri, 23 Oct 2026 08:27:27 +0100
+Subject: [PATCH] Copy file mtimes with std instead of filetime
+
+filetime has no WASI implementation and panics there. std's
+Metadata::modified and File::set_modified cover the same need on every
+platform. Setting the time is now best-effort: hosts that can't do it (such
+as in-browser WASI shims) only lose the skip-unchanged-file optimisation on
+the next build. filetime is kept as a dev-dependency for the tests.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ components/utils/Cargo.toml |  2 +-
+ components/utils/src/fs.rs  | 18 +++++++++++++-----
+ 2 files changed, 14 insertions(+), 6 deletions(-)
+
+diff --git a/components/utils/Cargo.toml b/components/utils/Cargo.toml
+index 4aba4e3..f01c60c 100644
+--- a/components/utils/Cargo.toml
++++ b/components/utils/Cargo.toml
+@@ -7,7 +7,6 @@ include = ["src/**/*"]
+ 
+ [dependencies]
+ serde = { workspace = true }
+-filetime = { workspace = true }
+ fs-err = { workspace = true }
+ globset = { workspace = true }
+ percent-encoding = { workspace = true }
+@@ -19,4 +18,5 @@ walkdir = { workspace = true }
+ errors = { workspace = true }
+ 
+ [dev-dependencies]
++filetime = { workspace = true }
+ tempfile = "3"
+diff --git a/components/utils/src/fs.rs b/components/utils/src/fs.rs
+index 8e73ba5..1be0464 100644
+--- a/components/utils/src/fs.rs
++++ b/components/utils/src/fs.rs
+@@ -1,4 +1,3 @@
+-use filetime::{FileTime, set_file_mtime};
+ use fs_err as fs;
+ use globset::GlobSet;
+ use std::io::prelude::*;
+@@ -68,6 +67,15 @@ pub fn copy_file(src: &Path, dest: &Path, base_path: &Path, hard_link: bool) ->
+     copy_file_if_needed(src, &target_path, hard_link)
+ }
+ 
++/// Copy the source mtime so the next build can skip unchanged files.
++/// Some hosts (e.g. in-browser WASI shims) can't set times; that only costs a re-copy next time.
++fn copy_mtime(dest: &Path, mtime: SystemTime) -> Result<()> {
++    match fs::File::options().write(true).open(dest)?.set_modified(mtime) {
++        Err(e) if e.kind() == std::io::ErrorKind::Unsupported => Ok(()),
++        res => Ok(res?),
++    }
++}
++
+ /// No copy occurs if all of the following conditions are satisfied:
+ /// 1. A file with the same name already exists in the dest path.
+ /// 2. Its modification timestamp is identical to that of the src file.
+@@ -84,21 +92,21 @@ pub fn copy_file_if_needed(src: &Path, dest: &Path, hard_link: bool) -> Result<(
+     } else {
+         let src_metadata = fs::metadata(src)
+             .with_context(|| format!("Failed to get metadata of {}", src.display()))?;
+-        let src_mtime = FileTime::from_last_modification_time(&src_metadata);
++        let src_mtime = src_metadata.modified()?;
+         if Path::new(&dest).is_file() {
+             let target_metadata = fs::metadata(dest)?;
+-            let target_mtime = FileTime::from_last_modification_time(&target_metadata);
++            let target_mtime = target_metadata.modified()?;
+             if !(src_mtime == target_mtime && src_metadata.len() == target_metadata.len()) {
+                 fs::copy(src, dest).with_context(|| {
+                     format!("Was not able to copy file {} to {}", src.display(), dest.display())
+                 })?;
+-                set_file_mtime(dest, src_mtime)?;
++                copy_mtime(dest, src_mtime)?;
+             }
+         } else {
+             fs::copy(src, dest).with_context(|| {
+                 format!("Was not able to copy directory {} to {}", src.display(), dest.display())
+             })?;
+-            set_file_mtime(dest, src_mtime)?;
++            copy_mtime(dest, src_mtime)?;
+         }
+     }
+     Ok(())
