@@ -1,6 +1,6 @@
 {
   "name": "zola-wasi",
-  "version": "0.23.6",
+  "version": "0.0.0-dev",
   "description": "Zola, the static site generator, compiled to WebAssembly: build sites in the browser or Node",
   "license": "EUPL-1.2",
   "type": "module",

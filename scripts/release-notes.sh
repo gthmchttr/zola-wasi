@@ -43,7 +43,7 @@ const { ok, files, stderr } = await zola.build({ files: { "zola.toml": "...", "c
 ### Patches on top of Zola ${ZOLA_TAG}
 
 EOF
-for patch in "$ROOT"/patches/*.patch; do
+patch_files "$ZOLA_TAG" | while read -r patch; do
   subject="$(sed -n 's/^Subject: \(\[PATCH[^]]*\] \)\{0,1\}//p' "$patch" | head -1)"
   echo "- $subject"
 done

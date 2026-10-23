@@ -28,11 +28,25 @@ if ! $quick; then
     (cd docs && cargo run --locked --quiet -- build --output-dir "$docs_out/public")
   )
 
-  log "clippy (native and $TARGET)"
+  # Only warnings on lines the patches add fail the build: older Zola releases trip newer clippy
+  # lints in their own code. Compile errors fail either way.
+  log "clippy on the patched code (native and $TARGET)"
   (
     cd "$ZOLA_DIR" || exit
-    cargo clippy --locked --all -- -D warnings
-    cargo clippy --locked --all --target "$TARGET" -- -D warnings
+    # "file:line" for every line the patches add
+    added="$(git diff -U0 "$ZOLA_TAG" wasi -- '*.rs' | awk '
+      /^\+\+\+ b\// { file = substr($2, 3) }
+      /^@@/ { split(substr($3, 2), range, ","); count = (range[2] == "" ? 1 : range[2])
+              for (i = 0; i < count; i++) print file ":" range[1] + i }')"
+    for target in "" "$TARGET"; do
+      report="$(cargo clippy --locked --all --message-format=short ${target:+--target "$target"} 2>&1)" ||
+        die "clippy failed${target:+ for $target}:"$'\n'"$report"
+      ours="$(grep -E '^[^ ]+\.rs:[0-9]+:[0-9]+: (warning|error)' <<<"$report" |
+        awk -F: 'NR == FNR { added[$0]; next } ($1 ":" $2) in added' <(echo "$added") - || true)"
+      [ -z "$ours" ] || die "clippy warnings in patched code${target:+ for $target}:"$'\n'"$ours"
+      others="$(grep -cE '^[^ ]+\.rs:[0-9]+:[0-9]+: warning' <<<"$report" || true)"
+      [ "$others" = 0 ] || log "  ($others warning(s) in upstream code the patches don't touch)"
+    done
   )
 fi
 
@@ -47,13 +61,19 @@ trap 'rm -rf "$WORK"' EXIT
 # (image processing writes into the site's static/), and compare the outputs.
 build_site() {
   local name=$1
-  mkdir -p "$WORK/native" "$WORK/wasm"
-  cp -R "$ZOLA_DIR/$name" "$WORK/native/$name"
-  cp -R "$ZOLA_DIR/$name" "$WORK/wasm/$name"
-  "$NATIVE" --root "$WORK/native/$name" build --output-dir "$WORK/native/$name.out" >/dev/null
+  local run
+  for run in native native-2 native-3 wasm; do
+    mkdir -p "$WORK/$run"
+    cp -R "$ZOLA_DIR/$name" "$WORK/$run/$name"
+  done
+  # Extra native builds show which files Zola itself doesn't build deterministically
+  for run in native native-2 native-3; do
+    "$NATIVE" --root "$WORK/$run/$name" build --output-dir "$WORK/$run/$name.out" >/dev/null
+  done
   "$WASMTIME" run --dir "$WORK/wasm::/work" "$DIST_DIR/zola.wasm" \
     --root "/work/$name" build --output-dir "/work/$name.out" >/dev/null
-  python3 "$ROOT/tests/compare_outputs.py" "$WORK/native/$name.out" "$WORK/wasm/$name.out"
+  python3 "$ROOT/tests/compare_outputs.py" "$WORK/native/$name.out" "$WORK/wasm/$name.out" \
+    "$WORK/native-2/$name.out" "$WORK/native-3/$name.out"
 }
 
 for site in test_site test_site_i18n docs; do
@@ -75,6 +95,10 @@ log "JavaScript library (Node, browser WASI shim)"
   cd "$ROOT/web" || exit
   export ZOLA_WASM="$DIST_DIR/zola.wasm" EXPECTED_DIR="$WORK/wasm/test_site.out" SITE_DIR="$ZOLA_DIR/test_site" \
     INVALID_SITE_DIR="$ZOLA_DIR/test_sites_invalid/indexmd"
+  # Files this Zola release doesn't build deterministically can't be compared byte for byte
+  UNSTABLE_FILES="$(python3 "$ROOT/tests/compare_outputs.py" --unstable \
+    "$WORK/native/test_site.out" "$WORK/native-2/test_site.out" "$WORK/native-3/test_site.out")"
+  export UNSTABLE_FILES
   npm test --silent
   log "JavaScript browser bundle (dist/zola-wasi.js)"
   ZOLA_LIB="$DIST_DIR/zola-wasi.js" npm test --silent

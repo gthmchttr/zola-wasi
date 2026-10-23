@@ -8,6 +8,8 @@ const outfile = process.argv[2];
 if (!outfile) throw new Error("usage: node build-bundle.mjs OUTFILE");
 
 const pkg = JSON.parse(readFileSync(new URL("package.json", import.meta.url)));
+// The Zola release being built (scripts/build.sh sets it); package.json only holds a placeholder
+const version = (process.env.ZOLA_VERSION ?? pkg.version).replace(/^v/, "");
 const shim = JSON.parse(readFileSync(new URL("node_modules/@bjorn3/browser_wasi_shim/package.json", import.meta.url)));
 
 await build({
@@ -21,7 +23,7 @@ await build({
   legalComments: "none",
   banner: {
     js: [
-      `/*! zola-wasi ${pkg.version}: Zola compiled to WebAssembly. ${pkg.license}, https://www.getzola.org`,
+      `/*! zola-wasi ${version}: Zola compiled to WebAssembly. ${pkg.license}, https://www.getzola.org`,
       ` * Includes @bjorn3/browser_wasi_shim ${shim.version} (${shim.license}), https://github.com/bjorn3/browser_wasi_shim */`,
     ].join("\n"),
   },

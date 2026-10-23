@@ -1,24 +1,29 @@
-# Fetch Zola, apply patches/, test, build zola.wasm and publish it as a GitHub release.
+# Build zola.wasm for the Zola releases in VERSIONS that don't have a GitHub release yet, and
+# publish them. Each build fetches Zola, applies its patch series and runs the full test suite
+# before anything is published.
 #
-# Runs when UPSTREAM or patches/ change on main (e.g. after merging an update-upstream PR), and
-# on demand. Automatic releases are published as pre-releases (release candidates): promote one
-# to a full release in the GitHub UI once you're happy with it.
+# Runs when VERSIONS or patches/ change on main, e.g. after merging an update-upstream PR: every
+# version already released is skipped, so only new ones get built. Automatic releases are
+# pre-releases (release candidates): promote one in the GitHub UI once you're happy with it.
 #
-# The release tag is UPSTREAM's ZOLA_TAG, e.g. v0.23.6. To re-release the same Zola version with
-# changed patches, run this workflow by hand with a suffixed tag such as v0.23.6-2.
+# Run it by hand to do the same, or with `zola_version` to build one specific version, e.g. to
+# re-release it with changed patches under a suffixed tag such as v0.23.6-2.
 name: release
 
 on:
   push:
     branches: [main]
-    paths: [UPSTREAM, patches/**]
+    paths: [UPSTREAM, VERSIONS, patches/**]
   workflow_dispatch:
     inputs:
+      zola_version:
+        description: "Build only this Zola release from VERSIONS (default: every one without a release)"
+        required: false
       tag:
-        description: Release tag. Defaults to UPSTREAM's ZOLA_TAG; use e.g. v0.23.6-2 to re-release with new patches
+        description: "Release tag when building one version. Defaults to the Zola version; use e.g. v0.23.6-2 to re-release"
         required: false
       prerelease:
-        description: Publish as a pre-release (release candidate)
+        description: "Publish as pre-releases (release candidates)"
         type: boolean
         default: true
 
@@ -30,73 +35,100 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  plan:
     runs-on: ubuntu-latest
+    outputs:
+      builds: ${{ steps.plan.outputs.builds }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Choose the release tag
-        id: tag
+      - name: Choose what to release
+        id: plan
         env:
+          ZOLA_VERSION: ${{ inputs.zola_version }}
           INPUT_TAG: ${{ inputs.tag }}
         run: |
-          . UPSTREAM
-          tag="${INPUT_TAG:-$ZOLA_TAG}"
-          # The tag must name the Zola release it was built from
-          if ! [[ "$tag" =~ ^${ZOLA_TAG//./\\.}(-[0-9]+)?$ ]]; then
-            echo "::error::Release tag $tag doesn't match UPSTREAM's $ZOLA_TAG (expected $ZOLA_TAG or $ZOLA_TAG-N)"
-            exit 1
-          fi
-          if gh release view "$tag" >/dev/null 2>&1; then
-            if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+          . scripts/common.sh
+          if [ -n "$ZOLA_VERSION" ]; then
+            # One specific version, whether or not it was released before
+            tag="${INPUT_TAG:-$ZOLA_TAG}"
+            if ! [[ "$tag" =~ ^${ZOLA_TAG//./\\.}(-[0-9]+)?$ ]]; then
+              echo "::error::Release tag $tag doesn't match Zola $ZOLA_TAG (expected $ZOLA_TAG or $ZOLA_TAG-N)"
+              exit 1
+            fi
+            if gh release view "$tag" >/dev/null 2>&1; then
               echo "::error::Release $tag already exists. Delete it first, or pass a new tag like $ZOLA_TAG-2"
               exit 1
             fi
-            echo "::notice::Release $tag already exists, nothing to do. Run this workflow by hand with a tag like $ZOLA_TAG-2 to re-release."
-            echo "skip=true" >>"$GITHUB_OUTPUT"
+            builds="$(printf '%s %s\n' "$ZOLA_TAG" "$tag")"
+          else
+            [ -z "$INPUT_TAG" ] || { echo "::error::A tag needs a zola_version"; exit 1; }
+            builds="$(scripts/missing-releases.sh | awk '{print $1, $1}')"
           fi
-          echo "tag=$tag" >>"$GITHUB_OUTPUT"
+          if [ -z "$builds" ]; then
+            echo "::notice::Every version in VERSIONS already has a release, nothing to build"
+          else
+            echo "::notice::Releasing: $(awk '{print $2}' <<<"$builds" | xargs)"
+          fi
+          newest="$(zola_versions | tail -n 1 | awk '{print $1}')"
+          echo "builds=$(python3 -c '
+          import json, sys
+          newest = sys.argv[1]
+          rows = [line.split() for line in sys.stdin.read().splitlines() if line.strip()]
+          print(json.dumps([{"zola": z, "tag": t, "latest": z == newest} for z, t in rows]))
+          ' "$newest" <<<"$builds")" >>"$GITHUB_OUTPUT"
+
+  release:
+    needs: plan
+    if: needs.plan.outputs.builds != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.builds) }}
+    name: release ${{ matrix.tag }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ZOLA_VERSION: ${{ matrix.zola }}
+    steps:
+      - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
-        if: steps.tag.outputs.skip != 'true'
         with:
           targets: wasm32-wasip1
           components: rustfmt, clippy
 
       - uses: actions/setup-node@v4
-        if: steps.tag.outputs.skip != 'true'
         with:
           node-version: 20
 
       - uses: actions/cache@v4
-        if: steps.tag.outputs.skip != 'true'
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             .toolchain
-          key: ${{ runner.os }}-${{ hashFiles('UPSTREAM', 'patches/*.patch', 'scripts/toolchain.sh') }}
+          key: ${{ runner.os }}-${{ matrix.zola }}-${{ hashFiles('VERSIONS', 'patches/**', 'scripts/toolchain.sh') }}
 
-      # Builds dist/zola.wasm and runs the whole suite against it
+      # Builds dist/zola.wasm and dist/zola-wasi.js and runs the whole suite against them
       - name: Build and test
-        if: steps.tag.outputs.skip != 'true'
         run: scripts/test.sh
 
       - name: Package
-        if: steps.tag.outputs.skip != 'true'
         run: scripts/package.sh
 
       - name: Publish
-        if: steps.tag.outputs.skip != 'true'
         env:
-          TAG: ${{ steps.tag.outputs.tag }}
+          TAG: ${{ matrix.tag }}
           # Automatic releases are always release candidates
           PRERELEASE: ${{ github.event_name == 'push' || inputs.prerelease }}
+          # Only the newest Zola version may become the repository's "latest" release
+          LATEST: ${{ matrix.latest }}
         run: |
           scripts/release-notes.sh "$TAG" >release-notes.md
-          flags=()
+          flags=(--latest="$LATEST")
           [ "$PRERELEASE" = true ] && flags+=(--prerelease)
           gh release create "$TAG" dist/release/* \
             --target "$GITHUB_SHA" \

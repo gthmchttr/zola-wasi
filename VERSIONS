@@ -1,0 +1,6 @@
+# Every Zola release zola-wasi publishes, oldest first: the tag, and the commit it must point at.
+# release.yml builds and releases each one that has no GitHub release yet, so adding a line here
+# (or merging an update-upstream PR) publishes it. The last line is the default for the scripts.
+# Patches for each are found under patches/.
+v0.22.1 29540e9897dbe8aca388b13f7bdf615985f6ca2c
+v0.23.6 1969d846a7ca7536dc547da500bcf9be9c631f40

@@ -7,21 +7,37 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.versions.outputs.versions }}
     steps:
       - uses: actions/checkout@v4
+      - name: Patch series
+        run: scripts/check-series.sh
       - name: shellcheck
         run: shellcheck -x scripts/*.sh
       - name: actionlint
         run: |
           bash <(curl -sSf https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
           ./actionlint -color
+      # The newest release of each line in VERSIONS: that covers every patch series without
+      # rebuilding every patch release on each push (release.yml tests each one it publishes)
+      - name: Versions
+        id: versions
+        run: |
+          . scripts/common.sh
+          echo "versions=$(zola_versions | sort -V | awk '{line = $1; sub(/\.[0-9]+$/, "", line); newest[line] = $1} END {for (l in newest) print newest[l]}' | sort -V | python3 -c 'import json, sys; print(json.dumps(sys.stdin.read().split()))')" >>"$GITHUB_OUTPUT"
 
   test:
+    needs: lint
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        zola: ${{ fromJSON(needs.lint.outputs.versions) }}
+    name: test (${{ matrix.zola }}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    env:
+      ZOLA_VERSION: ${{ matrix.zola }}
     steps:
       - uses: actions/checkout@v4
 
@@ -40,12 +56,14 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             .toolchain
-          key: ${{ runner.os }}-${{ hashFiles('UPSTREAM', 'patches/*.patch', 'scripts/toolchain.sh') }}
+          key: ${{ runner.os }}-${{ matrix.zola }}-${{ hashFiles('VERSIONS', 'patches/**', 'scripts/toolchain.sh') }}
 
       - run: scripts/test.sh
 
       - uses: actions/upload-artifact@v4
         if: matrix.os == 'ubuntu-latest'
         with:
-          name: zola-wasm
-          path: dist/zola.wasm*
+          name: zola-wasm-${{ matrix.zola }}
+          path: |
+            dist/zola.wasm*
+            dist/zola-wasi.js

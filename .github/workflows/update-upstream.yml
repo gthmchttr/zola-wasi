@@ -1,7 +1,9 @@
-# Check daily for a new Zola release and open a PR that points UPSTREAM at it.
+# Check daily for a new Zola release and open a PR that adds it to VERSIONS (scripts/update-upstream.sh).
 #
-# The PR says whether the patches still apply. Its CI run (test.yml) builds and tests everything,
-# and merging it triggers release.yml, which publishes the new version as a release candidate.
+# Every release stays listed. A patch release uses its line's patch series; a new line with no
+# patches yet starts with a series reusing the previous line's. The PR says whether the patches
+# apply. Its CI run (test.yml) tests the newest release of each line, and merging it triggers
+# release.yml, which publishes the new version as a release candidate.
 #
 # Setup, in the repository's Settings:
 # - Actions → General → Workflow permissions: allow GitHub Actions to create pull requests.
@@ -16,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Zola tag to update to (defaults to the latest release)
+        description: "Zola tag to update to (defaults to the latest release)"
         required: false
 
 permissions:
@@ -62,11 +64,13 @@ jobs:
       - name: Check that the patches still apply
         id: patches
         if: steps.update.outputs.tag
+        env:
+          ZOLA_VERSION: ${{ steps.update.outputs.tag }}
         run: |
           if scripts/setup.sh >setup.log 2>&1; then
-            echo "result=apply cleanly" >>"$GITHUB_OUTPUT"
+            echo "result=applies cleanly" >>"$GITHUB_OUTPUT"
           else
-            echo "result=**don't apply**" >>"$GITHUB_OUTPUT"
+            echo "result=**doesn't apply**" >>"$GITHUB_OUTPUT"
             { echo 'log<<EOF'; tail -n 30 setup.log; echo EOF; } >>"$GITHUB_OUTPUT"
           fi
 
@@ -81,17 +85,22 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$BRANCH"
-          git add UPSTREAM web/package.json
+          git add VERSIONS patches
           git commit -m "Update Zola to $TAG"
           git push origin "$BRANCH"
 
           {
-            echo "[Zola $TAG](https://github.com/getzola/zola/releases/tag/$TAG) is out. This points \`UPSTREAM\` at it."
+            echo "[Zola $TAG](https://github.com/getzola/zola/releases/tag/$TAG) is out. This adds it to \`VERSIONS\`, the versions zola-wasi releases."
             echo
-            echo "The patches in \`patches/\` $PATCHES on $TAG."
+            echo '```diff'
+            git diff HEAD~1 -- VERSIONS | sed -n '/^[-+]v/p'
+            echo '```'
+            echo
+            series="$(ZOLA_VERSION="$TAG" bash -c '. scripts/common.sh && series_dir "$ZOLA_TAG"' | sed "s#^$PWD/##")"
+            echo "Its patch series, \`$series/series\`, $PATCHES on $TAG."
             if [ -n "$PATCH_LOG" ]; then
               echo
-              echo "To fix them: \`rm -rf zola && scripts/setup.sh\`, resolve the failing patch with \`git am\` in \`zola/\`, then \`scripts/export-patches.sh\` and push to this branch."
+              echo "To fix them: \`ZOLA_VERSION=$TAG scripts/setup.sh\`, resolve the failing patch with \`git am\` in \`zola/\`, then \`ZOLA_VERSION=$TAG scripts/export-patches.sh\` and push to this branch."
               echo
               echo '```'
               echo "$PATCH_LOG"

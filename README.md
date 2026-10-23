@@ -22,10 +22,10 @@ const { ok, files, stderr } = await zola.build({
 // files: Map of output path → Uint8Array, e.g. files.get("index.html")
 ```
 
-This repository doesn't contain Zola. It holds a small patch series, the Zola release it
-applies to (`UPSTREAM`, currently **Zola 0.23.6**), scripts that fetch that release, patch,
-build and test it, and a JavaScript wrapper for browsers and Node. GitHub Actions publish the
-result as releases and keep `UPSTREAM` current.
+This repository doesn't contain Zola. It holds small patch series for the Zola releases it
+publishes (`VERSIONS`: currently **0.22.1** and **0.23.6**), scripts that fetch a release,
+patch, build and test it, and a JavaScript wrapper for browsers and Node. GitHub Actions publish
+a release for every version in `VERSIONS` and add new Zola releases as they come out.
 
 ## Download
 
@@ -52,6 +52,12 @@ scripts/test.sh         # everything below; --quick skips the upstream checks an
 scripts/serve-demo.sh   # live editor in the browser at http://127.0.0.1:8000/
 ```
 
+Every script works on the newest release in `VERSIONS` unless you set `ZOLA_VERSION`:
+
+```sh
+ZOLA_VERSION=v0.22.1 scripts/build.sh
+```
+
 `build.sh` downloads its own toolchain into `.toolchain/` (checksums are pinned): wasi-sdk,
 whose clang builds Zola's C dependencies (oniguruma, zstd, libwebp) for WASI, and wasmtime for
 running the tests. It also installs the `wasm32-wasip1` Rust target if it's missing.
@@ -60,22 +66,54 @@ running the tests. It also installs the `wasm32-wasip1` Rust target if it's miss
 
 | Path | |
 |---|---|
-| `UPSTREAM` | The Zola release the patches apply to (tag and commit) |
-| `patches/` | The changes to Zola, one concern per patch, ready to send upstream |
-| `scripts/setup.sh` | Clones the release into `zola/` and applies the patches as commits on branch `wasi` |
+| `VERSIONS` | Every Zola release zola-wasi publishes, with its pinned commit; the last is the scripts' default |
+| `UPSTREAM` | Where Zola's source comes from |
+| `patches/` | The changes to Zola for each release line, one concern per patch, ready to send upstream (see below) |
+| `scripts/setup.sh` | Checks out a release into `zola/` and applies its patches as commits on branch `wasi` |
 | `scripts/toolchain.sh` | Downloads and verifies wasi-sdk and wasmtime |
 | `scripts/build.sh` | Builds `dist/zola.wasm` (and `zola.wasm.sha256`) |
 | `scripts/test.sh` | The full test suite |
-| `scripts/export-patches.sh` | Regenerates `patches/` from commits in `zola/` |
+| `scripts/export-patches.sh` | Regenerates a release's patch series from commits in `zola/`, sharing patches between versions |
+| `scripts/check-series.sh` | Checks that every release has a patch series and every patch is used |
 | `scripts/serve-demo.sh` | Serves `web/demo` |
 | `scripts/package.sh` | Assembles release assets into `dist/release/` |
 | `scripts/release-notes.sh` | Writes a release's notes |
-| `scripts/update-upstream.sh` | Points `UPSTREAM` at the latest (or a given) Zola release |
+| `scripts/update-upstream.sh` | Adds the latest (or a given) Zola release to `VERSIONS` |
+| `scripts/missing-releases.sh` | Lists the versions in `VERSIONS` that have no GitHub release yet |
 | `.github/workflows/` | CI (`test.yml`), releases (`release.yml`), upstream updates (`update-upstream.yml`) |
 | `web/` | The `zola-wasi` JavaScript package: `src/index.js`, its tests, the demo and `build-bundle.mjs` (browser bundle) |
 | `tests/compare_outputs.py` | Compares two Zola output directories |
 
 ### The patches
+
+Patches are organised by release line, and versions share them where the code allows:
+
+```
+patches/
+  v0.23/series     →  v0.23/Don-t-depend-on-reqwest-….patch
+                      v0.23/Copy-file-mtimes-….patch
+                      v0.23/Don-t-copy-image-file-permissions-on-WASI.patch
+                      v0.23/Build-the-zola-CLI-….patch
+  v0.22/series     →  v0.22/Don-t-depend-on-reqwest-….patch
+                      v0.22/Copy-file-mtimes-….patch
+                      v0.23/Don-t-copy-image-file-permissions-on-WASI.patch   ← shared with 0.23
+                      v0.22/Build-the-zola-CLI-….patch
+```
+
+- **Which series a release uses:** `patches/<tag>/series` if that exact release has one,
+  otherwise `patches/<vMAJOR.MINOR>/series`. So every 0.23.x uses `v0.23/` unless one release
+  needs its own.
+- **A series file** lists patches in the order to apply them, as paths relative to `patches/`.
+  Listing another line's patch, as `v0.22/series` does above, shares it: one file, used by both.
+- **`scripts/export-patches.sh` shares automatically.** When it exports a commit whose change is
+  identical to a patch another series already has (compared with `git patch-id`), it lists that
+  patch instead of writing a copy. If you change a shared patch, it tells you which other
+  versions use it, and `test.yml` tests all of them.
+- **A new release line** (say 0.24) starts from the previous line's series, via
+  `scripts/update-upstream.sh`. Patches that still apply stay shared; only the ones that don't
+  need a 0.24 version.
+
+Each series makes the same four changes, adapted to that release's code:
 
 1. **Don't depend on reqwest when targeting WebAssembly.** reqwest needs tokio's networking and
    native TLS. On wasm, external link checking reports that it's unsupported, and `load_data`
@@ -197,21 +235,35 @@ hasn't been tested.
    `test_site` must be byte-identical to the wasmtime build, plus options, errors, concurrent
    builds, path validation and a silent console.
 
-`.github/workflows/test.yml` runs it, plus shellcheck and actionlint, on every push and pull
-request, on Linux and macOS.
+`.github/workflows/test.yml` runs it on Linux and macOS, on every push and pull request, for the
+newest release of each line in `VERSIONS`, which covers every patch series, after checking the
+series, shellcheck and actionlint. `release.yml` runs it again for each version it publishes.
+
+The clippy check fails only on warnings in lines the patches add: older Zola releases trip
+newer clippy lints in their own code, which is reported but not ours to fix.
 
 ## Releases and Zola updates
 
 Both are automated:
 
+`VERSIONS` is the list of versions zola-wasi releases. Every entry gets a release, and entries
+stay: a new Zola release is added next to the old ones.
+
+- **`release.yml`** runs when `VERSIONS` or `patches/` change on `main`. It checks which versions
+  already have a GitHub release (`v0.23.6`, or a re-release like `v0.23.6-2`), skips those, and
+  builds the rest in parallel. Each runs the full test suite, then publishes a **pre-release** (a
+  release candidate) tagged with its Zola version; only the newest version can be marked as the
+  repository's latest release. Promote a release from the GitHub UI once you're happy with it.
+  Run it by hand to do the same, or with `zola_version` to build one version, e.g. to re-release
+  it with changed patches as `v0.23.6-2`.
 - **`update-upstream.yml`** checks daily for a new Zola release. When there is one, it opens a
-  PR (branch `update-zola-<tag>`) that updates `UPSTREAM` and `web/package.json`, saying whether
-  the patches still apply. Run it by hand to target a specific tag.
-- **`release.yml`** runs when `UPSTREAM` or `patches/` change on `main`, so merging an update
-  PR publishes the new version. It runs the full test suite, then publishes a **pre-release**
-  (a release candidate) tagged with the Zola version. Promote it to a full release from the
-  GitHub UI once you're happy with it. Run it by hand to choose the tag (e.g. `v0.23.6-2` to
-  re-release with changed patches) or to publish directly as a full release.
+  PR (branch `update-zola-<tag>`) adding it to `VERSIONS` and says whether its patch series
+  applies. A patch release (v0.23.7) uses its line's series; a new line (v0.24) starts with a
+  series sharing the previous line's patches. Merging the PR releases it. Run it by hand to
+  target a specific tag.
+
+So adding a release by hand is just a line in `VERSIONS` (with a patch series that applies to
+it), pushed to `main`.
 
 One-time setup in the repository's settings:
 
@@ -224,13 +276,23 @@ One-time setup in the repository's settings:
 ### Updating by hand
 
 1. `scripts/update-upstream.sh` (or `scripts/update-upstream.sh v0.24.0`).
-2. `rm -rf zola && scripts/setup.sh`. If a patch no longer applies, fix it up with `git am`
-   in `zola/` (or apply it by hand and commit), then `scripts/export-patches.sh`.
-3. `scripts/test.sh`.
+2. `scripts/setup.sh`. If a patch doesn't apply, resolve it in `zola/` and `git am --continue`
+   (or apply it by hand and commit), then `scripts/export-patches.sh`.
+3. `scripts/test.sh`, and `scripts/check-series.sh`.
 
-To change a patch: edit and commit in `zola/` (on branch `wasi`), then
-`scripts/export-patches.sh`. `setup.sh --keep`, which `build.sh` uses, leaves your checkout
-alone.
+To stop building a release, remove its line from `VERSIONS` (its existing GitHub release stays)
+and run `scripts/check-series.sh`, which lists patch files no series uses any more.
+
+### Changing a patch
+
+1. `ZOLA_VERSION=<tag> scripts/setup.sh`, then edit and commit in `zola/` (branch `wasi`).
+2. `ZOLA_VERSION=<tag> scripts/export-patches.sh` (add `--exact` to give that single release its
+   own series instead of changing its line's).
+3. Test every version whose series uses the patch, e.g. `ZOLA_VERSION=v0.22.1 scripts/test.sh`.
+
+The `zola/` checkout is shared between versions: switching `ZOLA_VERSION` re-checks it out, and
+Cargo's build cache carries over. `setup.sh --keep`, which `build.sh` uses, leaves it alone if
+it's already for the requested release.
 
 ## License
 

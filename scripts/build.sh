@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Build dist/zola.wasm, Zola's CLI for wasm32-wasip1, from the pinned release plus patches/,
-# and dist/zola-wasi.js, the self-contained browser bundle of the JavaScript library.
+# Build dist/zola.wasm, Zola's CLI for wasm32-wasip1, from a Zola release plus its patches, and
+# dist/zola-wasi.js, the self-contained browser bundle of the JavaScript library.
+# The release is ZOLA_VERSION (e.g. ZOLA_VERSION=v0.22.1), or the newest in VERSIONS.
 # Runs toolchain.sh and setup.sh first (setup keeps an existing ./zola checkout).
 . "$(dirname "$0")/common.sh"
 
@@ -16,7 +17,7 @@ cp "$ZOLA_DIR/target/$TARGET/release/zola.wasm" "$DIST_DIR/zola.wasm"
 (cd "$DIST_DIR" && sha256 zola.wasm >zola.wasm.sha256)
 
 log "Bundling the JavaScript library"
-(cd "$ROOT/web" && { [ -d node_modules ] || npm ci --silent; } && npm run --silent bundle)
+(cd "$ROOT/web" && { [ -d node_modules ] || npm ci --silent; } && ZOLA_VERSION="$ZOLA_TAG" npm run --silent bundle)
 
 version="$("$WASMTIME" run "$DIST_DIR/zola.wasm" --version)"
 log "Built $version: dist/zola.wasm ($(du -h "$DIST_DIR/zola.wasm" | cut -f1), $(gzip -9 -c "$DIST_DIR/zola.wasm" | wc -c | awk '{printf "%.1f MB", $1/1048576}') gzipped) and dist/zola-wasi.js ($(du -h "$DIST_DIR/zola-wasi.js" | cut -f1))"

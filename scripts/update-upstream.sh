@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# Point UPSTREAM (and web/package.json's version) at a Zola release.
+# Add a Zola release to VERSIONS, the list of versions zola-wasi releases, making it the default.
 #
 #   scripts/update-upstream.sh            # the latest release on GitHub
 #   scripts/update-upstream.sh v0.24.0    # a specific tag
 #
-# Prints the tag it settled on. Exits 0 when files changed, 3 when already up to date.
+# Every version stays listed, since each one gets (or has) a release. A patch release (v0.23.7)
+# uses its line's existing series; a new line (v0.24.0) with no patches yet starts with a series
+# that reuses the previous line's patches. Check with scripts/setup.sh whether they still apply.
+#
+# Prints the tag. Exits 0 when files changed, 3 when the release is already listed.
 . "$(dirname "$0")/common.sh"
 
 tag="${1:-}"
@@ -16,8 +20,8 @@ if [ -z "$tag" ]; then
 fi
 [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "unexpected Zola tag: $tag"
 
-if [ "$tag" = "$ZOLA_TAG" ]; then
-  log "Already on $tag"
+if zola_versions | awk '{print $1}' | grep -qx "$tag"; then
+  log "$tag is already in VERSIONS"
   echo "$tag"
   exit 3
 fi
@@ -26,21 +30,34 @@ fi
 commit="$(git ls-remote "$ZOLA_REPO" "refs/tags/$tag^{}" "refs/tags/$tag" | awk 'NR == 1 {print $1}')"
 [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || die "couldn't resolve $tag in $ZOLA_REPO"
 
-python3 - "$ROOT" "$tag" "$commit" <<'EOF'
-import json, pathlib, re, sys
-root, tag, commit = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-
-upstream = root / "UPSTREAM"
-text = upstream.read_text()
-text = re.sub(r"(?m)^ZOLA_TAG=.*$", f"ZOLA_TAG={tag}", text)
-text = re.sub(r"(?m)^ZOLA_COMMIT=.*$", f"ZOLA_COMMIT={commit}", text)
-upstream.write_text(text)
-
-package = root / "web" / "package.json"
-data = json.loads(package.read_text())
-data["version"] = tag.removeprefix("v")
-package.write_text(json.dumps(data, indent=2) + "\n")
+line="$(echo "$tag" | cut -d. -f1-2)"
+python3 - "$ROOT/VERSIONS" "$tag" "$commit" "$line" <<'EOF'
+import sys
+path, tag, commit, line = sys.argv[1:]
+kept = open(path).read().splitlines()
+kept.append(f"{tag} {commit}")
+# Oldest first: sort the entries by version, keeping the comment header in place
+header = [l for l in kept if not l.split("#")[0].strip()]
+entries = sorted((l for l in kept if l.split("#")[0].strip()),
+                 key=lambda l: tuple(int(n) for n in l.split()[0][1:].split(".")))
+open(path, "w").write("\n".join(header + entries) + "\n")
 EOF
 
-log "Updated UPSTREAM: $ZOLA_TAG → $tag ($commit)"
+if [ ! -f "$ROOT/patches/$tag/series" ] && [ ! -f "$ROOT/patches/$line/series" ]; then
+  # The closest older release (VERSIONS is sorted), or the oldest one if this release predates them all
+  previous="$(zola_versions | awk -v tag="$tag" '$1 == tag {print prev; exit} {prev = $1}')"
+  [ -n "$previous" ] || previous="$(zola_versions | awk '{print $1}' | grep -vx "$tag" | head -n 1)"
+  [ -n "$previous" ] || die "no earlier release to take patches from"
+  from="$(series_dir "$previous")"
+  mkdir -p "$ROOT/patches/$line"
+  {
+    echo "# Patches for Zola $line.x, applied in this order."
+    echo "# Started as ${from#"$ROOT"/patches/}'s series: entries that don't apply to $line need $line versions"
+    echo "# (scripts/setup.sh, fix in ./zola, scripts/export-patches.sh)."
+    sed -e '/^#/d' -e '/^[[:space:]]*$/d' "$from/series"
+  } >"$ROOT/patches/$line/series"
+  log "Created patches/$line/series from ${from#"$ROOT"/patches/}'s patches"
+fi
+
+log "Added $tag ($commit) to VERSIONS"
 echo "$tag"

@@ -1,4 +1,2 @@
-# Zola release the patches in patches/ apply to.
+# Where Zola's source comes from. The releases built from it are listed in VERSIONS.
 ZOLA_REPO=https://github.com/getzola/zola.git
-ZOLA_TAG=v0.23.6
-ZOLA_COMMIT=1969d846a7ca7536dc547da500bcf9be9c631f40

@@ -1,0 +1,6 @@
+# Patches for Zola v0.23.x, applied in this order.
+# Paths are relative to patches/; entries from other directories are shared with those versions.
+v0.23/Don-t-depend-on-reqwest-when-targeting-WebAssembly.patch
+v0.23/Copy-file-mtimes-with-std-instead-of-filetime.patch
+v0.23/Don-t-copy-image-file-permissions-on-WASI.patch
+v0.23/Build-the-zola-CLI-for-wasm32-wasip1.patch
